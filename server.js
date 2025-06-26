@@ -161,6 +161,16 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
 
     const page = await browser.newPage();
     
+    // 优化请求，禁用不必要的资源加载
+    await page.setRequestInterception(true);
+    page.on('request', (req) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+    
     // 设置视窗大小，模拟桌面浏览
     await page.setViewport({ width: 1920, height: 1080 });
     
@@ -170,7 +180,8 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
 
     // 导航到目标页面
     logProgress('正在导航到页面: ' + url);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 }); // 恢复适中的超时时间
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    logProgress('页面基本结构加载完成');
     
     // 智能等待关键元素出现
     logProgress('等待页面加载完成...');
@@ -508,6 +519,16 @@ app.post('/api/search-questions', async (req, res) => {
 
     const searchPage = await browser.newPage();
     
+    // 优化请求，禁用不必要的资源加载
+    await searchPage.setRequestInterception(true);
+    searchPage.on('request', (req) => {
+      if (['image', 'stylesheet', 'font', 'media'].includes(req.resourceType())) {
+        req.abort();
+      } else {
+        req.continue();
+      }
+    });
+
     // 设置视窗大小，模拟桌面浏览
     await searchPage.setViewport({ width: 1920, height: 1080 });
     
@@ -520,7 +541,8 @@ app.post('/api/search-questions', async (req, res) => {
     
     // 导航到搜索页面
     console.log('正在导航到搜索页面:', searchUrl);
-    await searchPage.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+    await searchPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    console.log('搜索页面基本结构加载完成');
     
     // 等待页面加载 - 更新选择器，使用更通用的选择器
     console.log('等待搜索结果加载...');
