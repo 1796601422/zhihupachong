@@ -1,0 +1,16 @@
+{
+  "language": "zh-CN",
+
+  "customInstructions": "请始终使用简体中文回答。在处理知乎爬虫项目相关代码时，请保持以下方面的一致性：\n- 遵循现有的三层架构（前端Vue + 后端Node/Express + Puppeteer无头浏览器）\n- 针对知乎内容抓取问题优先考虑：\n  1. CSS选择器更新\n  2. 等待时间调整\n  3. 滚动次数增加\n- 代码风格保持一致，使用ES6+语法\n- 保持现有的错误处理逻辑",
+  "modelParameters": {
+    "temperature": 0.7,
+    "topP": 0.95,
+    "maxTokens": 4000
+  },
+  "lspAutoCompletionEnabled": true,
+  "fileSearchEnabled": true
+} 
+每一次会话请求结束后进行会话总结，无论生成新文件还是修改已有文件，都需要做总结，
+并将总结内容Append写入到Readme文件中（说明文件中的内容是累计增加的），
+总结内容应包括:
+会话的目的；完成的主要任务;关键决策和解决方案使用；使用的技术栈；修改了哪些文件
