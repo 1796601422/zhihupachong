@@ -144,14 +144,16 @@
             <i class="el-icon-info"></i> 爬取统计信息
           </div>
           <table class="stats-table">
-            <tr>
-              <td class="stats-label">总回答数:</td>
-              <td class="stats-value">{{ result.answers.length }}</td>
-              <td class="stats-label">爬取用时:</td>
-              <td class="stats-value">{{ fetchTime }}秒</td>
-              <td class="stats-label">平均点赞:</td>
-              <td class="stats-value">{{ averageVotes }}</td>
-            </tr>
+            <tbody>
+              <tr>
+                <td class="stats-label">总回答数:</td>
+                <td class="stats-value">{{ result.answers.length }}</td>
+                <td class="stats-label">爬取用时:</td>
+                <td class="stats-value">{{ fetchTime }}秒</td>
+                <td class="stats-label">平均点赞:</td>
+                <td class="stats-value">{{ averageVotes }}</td>
+              </tr>
+            </tbody>
           </table>
         </el-card>
       </div>

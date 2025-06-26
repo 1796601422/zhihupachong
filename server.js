@@ -10,6 +10,62 @@ const stream =require('stream');
 const pipeline = promisify(stream.pipeline);
 const Jimp = require('jimp');
 
+const getPuppeteerLaunchOptions = (logProgress) => {
+  let launchOptions = {};
+  const isProduction = process.env.NODE_ENV === 'production';
+  const executablePathFromEnv = process.env.PUPPETEER_EXECUTABLE_PATH;
+
+  // 优先判断是否为服务器/生产环境
+  if (isProduction || executablePathFromEnv) {
+    logProgress('检测到生产/服务器环境，使用优化配置');
+    const executablePath = executablePathFromEnv || '/usr/bin/google-chrome-stable';
+    logProgress(`将使用浏览器: ${executablePath}`);
+    
+    launchOptions = {
+      headless: true,
+      executablePath: executablePath,
+      args: [
+        '--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security',
+        '--disable-dev-shm-usage', '--disable-gpu', '--no-zygote',
+        '--single-process', '--disable-extensions', '--disable-accelerated-2d-canvas',
+        '--disable-gl-drawing-for-tests', '--mute-audio', '--js-flags=--max-old-space-size=512'
+      ],
+      defaultViewport: { width: 1920, height: 1080 }
+    };
+  } else {
+    // 否则，假定为本地开发环境
+    logProgress('检测到本地开发环境，使用调试配置');
+    const browserPaths = [
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+    ];
+    const localBrowserPath = browserPaths.find(p => {
+      try { return fs.existsSync(p); } catch (e) { return false; }
+    });
+
+    if (localBrowserPath) {
+      logProgress(`找到本地浏览器: ${localBrowserPath}`);
+      launchOptions = {
+        headless: false,
+        executablePath: localBrowserPath,
+        defaultViewport: null,
+        args: ['--start-maximized', '--auto-open-devtools-for-tabs', '--disable-blink-features=AutomationControlled']
+      };
+    } else {
+      logProgress('警告：未在常规路径找到Chrome/Edge，将尝试使用Puppeteer自带的Chromium。');
+      launchOptions = {
+        headless: false,
+        defaultViewport: null,
+        args: ['--start-maximized']
+      };
+    }
+  }
+  return launchOptions;
+};
+
 // 使用隐身插件，隐藏Puppeteer的特征
 puppeteer.use(StealthPlugin());
 
@@ -100,45 +156,7 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
     console.log(`解析后的Cookie对象数量: ${cookieObjects.length}`);
 
     // 启动浏览器
-    let launchOptions = {
-      headless: true,
-      args: [
-        '--no-sandbox', 
-        '--disable-setuid-sandbox', 
-        '--disable-web-security',
-        '--disable-dev-shm-usage',
-        '--disable-gpu'
-      ],
-      defaultViewport: { width: 1920, height: 1080 }
-    };
-    
-    // 如果设置了PUPPETEER_EXECUTABLE_PATH环境变量，使用它作为Chrome路径
-    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
-      logProgress('使用环境变量中的浏览器路径: ' + process.env.PUPPETEER_EXECUTABLE_PATH);
-      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-    } else {
-      // 本地开发环境，尝试使用Edge或Chrome
-      const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-      const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-      
-      try {
-        if (fs.existsSync(edgePath)) {
-          launchOptions.executablePath = edgePath;
-        } else if (fs.existsSync(chromePath)) {
-          launchOptions.executablePath = chromePath;
-        } else {
-          throw new Error('未找到Edge或Chrome浏览器');
-        }
-        logProgress('使用本地浏览器路径: ' + launchOptions.executablePath);
-      } catch (error) {
-        console.error('查找浏览器失败:', error);
-        return res.status(500).json({ 
-          success: false, 
-          message: '未找到可用的浏览器，请确保安装了Edge或Chrome'
-        });
-      }
-    }
-    
+    const launchOptions = getPuppeteerLaunchOptions(logProgress);
     browser = await puppeteer.launch(launchOptions);
 
     const page = await browser.newPage();
@@ -485,34 +503,8 @@ app.post('/api/search-questions', async (req, res) => {
     console.log(`解析后的Cookie对象数量: ${cookieObjects.length}`);
 
     // 启动浏览器
-    const edgePath = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
-    const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-    
-    // 尝试使用Edge，如果失败则使用Chrome
-    let executablePath = '';
-    try {
-      if (fs.existsSync(edgePath)) {
-        executablePath = edgePath;
-      } else if (fs.existsSync(chromePath)) {
-        executablePath = chromePath;
-      } else {
-        throw new Error('未找到Edge或Chrome浏览器');
-      }
-    } catch (error) {
-      console.error('查找浏览器失败:', error);
-      return res.status(500).json({ 
-        success: false, 
-        message: '未找到可用的浏览器，请确保安装了Edge或Chrome'
-      });
-    }
-    
-    console.log('使用浏览器路径:', executablePath);
-    browser = await puppeteer.launch({
-      executablePath,
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-web-security'],
-      defaultViewport: { width: 1920, height: 1080 }
-    });
+    const launchOptions = getPuppeteerLaunchOptions(console.log);
+    browser = await puppeteer.launch(launchOptions);
 
     const searchPage = await browser.newPage();
     
