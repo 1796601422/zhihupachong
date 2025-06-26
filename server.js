@@ -180,7 +180,7 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
 
     // 导航到目标页面
     logProgress('正在导航到页面: ' + url);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 1800000 });
     logProgress('页面基本结构加载完成');
     
     // 智能等待关键元素出现
@@ -541,7 +541,7 @@ app.post('/api/search-questions', async (req, res) => {
     
     // 导航到搜索页面
     console.log('正在导航到搜索页面:', searchUrl);
-    await searchPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
+    await searchPage.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 1800000 });
     console.log('搜索页面基本结构加载完成');
     
     // 等待页面加载 - 更新选择器，使用更通用的选择器
