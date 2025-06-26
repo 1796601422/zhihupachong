@@ -180,7 +180,7 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
 
     // 导航到目标页面
     logProgress('正在导航到页面: ' + url);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 1800000 });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 3600000 });
     logProgress('页面基本结构加载完成');
     
     // 智能等待关键元素出现
