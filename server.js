@@ -182,10 +182,26 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
     logProgress('正在导航到页面: ' + url);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 3600000 });
     logProgress('页面基本结构加载完成');
-    
-    // 智能等待关键元素出现
+
+    // 增加一个短暂的固定等待，模拟用户行为
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    logProgress('已等待3秒，开始检测关键元素');
+
+    // 智能等待关键元素出现，增加备用选择器和更长的超时
     logProgress('等待页面加载完成...');
-    await page.waitForSelector('.QuestionHeader-title', { timeout: 30000 }); // 恢复适中的等待时间
+    try {
+      await page.waitForSelector('.QuestionHeader-title, .Question-mainColumn h1', { timeout: 1800000 });
+    } catch (e) {
+      logProgress('错误：等待关键元素失败。页面可能需要验证或已更改结构。');
+      
+      // 失败时截图以供调试
+      const screenshotPath = path.join(__dirname, 'downloads', `error_screenshot_${Date.now()}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      logProgress(`已截取当前页面快照: ${screenshotPath}`);
+
+      // 重新抛出错误，中断后续执行
+      throw e;
+    }
     
     // 等待额外时间确保页面完全加载
     await new Promise(resolve => setTimeout(resolve, 2000));
