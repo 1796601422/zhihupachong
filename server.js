@@ -1070,14 +1070,14 @@ app.post('/api/scrape', async (req, res) => {
         
         logProgress('已优化资源加载策略，禁用了图片、字体和CSS');
 
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 300000 });
         logProgress('页面导航成功');
 
         // 增加等待时间并添加备用选择器
         logProgress('等待页面加载完成，寻找问题标题元素...');
         try {
             await page.waitForSelector('.QuestionHeader-title, .Question-title, h1.title, .QuestionPage h1', { 
-                timeout: 60000,
+                timeout: 300000, // 增加到5分钟(300秒)
                 visible: true 
             });
             logProgress('成功找到问题标题元素');
