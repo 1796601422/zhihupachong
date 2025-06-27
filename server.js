@@ -933,7 +933,18 @@ async function legacyScrollAndScrape(page, logProgress) {
     const maxNoChangeAttempts = 3;
 
     do {
-        previousAnswerCount = await page.evaluate(() => document.querySelectorAll('.List-item').length);
+        // 使用更多的选择器来适应知乎可能的页面结构变化
+        previousAnswerCount = await page.evaluate(() => {
+            // 尝试多种可能的答案容器选择器
+            const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
+            for (const selector of selectors) {
+                const elements = document.querySelectorAll(selector);
+                if (elements && elements.length > 0) {
+                    return elements.length;
+                }
+            }
+            return 0; // 如果都没找到，返回0
+        });
         
         await page.evaluate(async () => {
             await new Promise((resolve) => {
@@ -955,7 +966,17 @@ async function legacyScrollAndScrape(page, logProgress) {
 
         await new Promise(resolve => setTimeout(resolve, 3000));
         
-        currentAnswerCount = await page.evaluate(() => document.querySelectorAll('.List-item').length);
+        // 同样使用更多的选择器来计算当前回答数
+        currentAnswerCount = await page.evaluate(() => {
+            const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
+            for (const selector of selectors) {
+                const elements = document.querySelectorAll(selector);
+                if (elements && elements.length > 0) {
+                    return elements.length;
+                }
+            }
+            return 0;
+        });
         logProgress(`[传统模式] 当前回答数: ${currentAnswerCount}`);
 
         if (currentAnswerCount === previousAnswerCount) {
@@ -969,15 +990,53 @@ async function legacyScrollAndScrape(page, logProgress) {
     
     logProgress('[传统模式] 滚动结束。');
     return page.evaluate(() => {
-        return Array.from(document.querySelectorAll('.List-item')).map(item => {
-            const author = item.querySelector('.UserLink-link');
-            const content = item.querySelector('.RichText.ztext');
-            const vote = item.querySelector('.VoteButton--up');
-            return {
-                author: author ? author.innerText : '匿名用户',
-                content: content ? content.innerText : '',
-                vote: vote ? vote.innerText : '0',
-            };
+        // 尝试多种可能的选择器组合来提取答案
+        const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
+        let items = [];
+        
+        for (const selector of selectors) {
+            const elements = document.querySelectorAll(selector);
+            if (elements && elements.length > 0) {
+                items = Array.from(elements);
+                break;
+            }
+        }
+        
+        return items.map(item => {
+            // 尝试多种可能的作者选择器
+            let author = '匿名用户';
+            const authorSelectors = ['.UserLink-link', '.AuthorInfo-name', '.UserInfo-name', 'a.author-link'];
+            for (const selector of authorSelectors) {
+                const el = item.querySelector(selector);
+                if (el && el.innerText) {
+                    author = el.innerText;
+                    break;
+                }
+            }
+            
+            // 尝试多种可能的内容选择器
+            let content = '';
+            const contentSelectors = ['.RichText.ztext', '.RichContent-inner', '.content', '.AnswerItem-content'];
+            for (const selector of contentSelectors) {
+                const el = item.querySelector(selector);
+                if (el && el.innerText) {
+                    content = el.innerText;
+                    break;
+                }
+            }
+            
+            // 尝试多种可能的投票选择器
+            let vote = '0';
+            const voteSelectors = ['.VoteButton--up', '.VoteCount', '.AnswerItem-voteCount', '.Vote-count'];
+            for (const selector of voteSelectors) {
+                const el = item.querySelector(selector);
+                if (el && el.innerText) {
+                    vote = el.innerText;
+                    break;
+                }
+            }
+            
+            return { author, content, vote };
         });
     });
 }
@@ -999,29 +1058,79 @@ app.post('/api/scrape', async (req, res) => {
         await page.setCookie(...JSON.parse(cookie));
         logProgress('Cookie设置成功');
 
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
+        // 禁用图片、字体和CSS加载，加快页面渲染速度
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            if (req.resourceType() === 'image' || req.resourceType() === 'font' || req.resourceType() === 'stylesheet') {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+        
+        logProgress('已优化资源加载策略，禁用了图片、字体和CSS');
+
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
         logProgress('页面导航成功');
 
-        await page.waitForSelector('.QuestionHeader-title', { timeout: 30000 });
-        logProgress('页面加载完成，已找到问题标题');
+        // 增加等待时间并添加备用选择器
+        logProgress('等待页面加载完成，寻找问题标题元素...');
+        try {
+            await page.waitForSelector('.QuestionHeader-title, .Question-title, h1.title, .QuestionPage h1', { 
+                timeout: 60000,
+                visible: true 
+            });
+            logProgress('成功找到问题标题元素');
+        } catch (error) {
+            logProgress('警告：未能通过选择器找到标题，尝试检查页面内容...');
+            
+            // 截图保存，用于诊断
+            const screenshotPath = path.join(__dirname, 'downloads', `error_screenshot_${Date.now()}.png`);
+            await page.screenshot({ path: screenshotPath, fullPage: true });
+            logProgress(`已保存页面截图至: ${screenshotPath}`);
+            
+            // 检查页面是否包含验证码
+            const pageContent = await page.content();
+            if (pageContent.includes('验证码') || pageContent.includes('captcha') || pageContent.includes('安全验证')) {
+                throw new Error('检测到知乎验证码页面，请更新Cookie或使用其他IP地址');
+            } else {
+                throw error; // 重新抛出原始错误
+            }
+        }
+
+        // 增加一个短暂的等待，确保页面完全加载
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        logProgress('页面完全加载完成');
 
         let discoveredApiUrl = null;
         const apiResponseListener = async (response) => {
             const req = response.request();
-            if (req.resourceType() === 'xhr' && req.url().includes('/answers') && req.method() === 'GET') {
-                try {
-                    const json = await response.json();
-                    if (json.paging && typeof json.paging.is_end !== 'undefined') {
-                        logProgress(`成功捕获知乎回答API端点: ${req.url()}`);
-                        if(!discoveredApiUrl) discoveredApiUrl = req.url();
+            // 扩大API匹配范围，捕获更多可能的API端点
+            if (req.resourceType() === 'xhr' || req.resourceType() === 'fetch') {
+                const url = req.url();
+                if ((url.includes('/answers') || url.includes('/api/v4/questions/') || url.includes('/api/v4/answer')) && 
+                    (req.method() === 'GET' || req.method() === 'POST')) {
+                    try {
+                        const json = await response.json().catch(() => null);
+                        if (json && json.paging && typeof json.paging.is_end !== 'undefined') {
+                            logProgress(`成功捕获知乎回答API端点: ${url}`);
+                            if(!discoveredApiUrl) discoveredApiUrl = url;
+                        }
+                    } catch (e) { 
+                        // 忽略非JSON响应
+                        logProgress(`尝试解析响应失败: ${e.message}`);
                     }
-                } catch (e) { /* ignore non-json responses */ }
+                }
             }
         };
         page.on('response', apiResponseListener);
 
         logProgress('执行初步滚动以发现API...');
-        await page.evaluate('window.scrollTo(0, document.body.scrollHeight)');
+        // 执行多次滚动，增加API发现概率
+        for (let i = 0; i < 3; i++) {
+            await page.evaluate('window.scrollTo(0, document.body.scrollHeight / 3 * ' + (i + 1) + ')');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
         await new Promise(resolve => setTimeout(resolve, 4000));
 
         page.off('response', apiResponseListener);
@@ -1031,16 +1140,55 @@ app.post('/api/scrape', async (req, res) => {
         if (discoveredApiUrl) {
             logProgress('检测到API，切换到API直连模式...');
             
+            // 从页面获取初始回答
             const initialAnswers = await page.evaluate(() => {
-                return Array.from(document.querySelectorAll('.List-item')).map(item => {
-                    const author = item.querySelector('.UserLink-link');
-                    const content = item.querySelector('.RichText.ztext');
-                    const vote = item.querySelector('.VoteButton--up');
-                    return {
-                        author: author ? author.innerText : '匿名用户',
-                        content: content ? content.innerText : '',
-                        vote: vote ? vote.innerText : '0',
-                    };
+                // 尝试多种可能的选择器
+                const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
+                let items = [];
+                
+                for (const selector of selectors) {
+                    const elements = document.querySelectorAll(selector);
+                    if (elements && elements.length > 0) {
+                        items = Array.from(elements);
+                        break;
+                    }
+                }
+                
+                return items.map(item => {
+                    // 尝试多种可能的作者选择器
+                    let author = '匿名用户';
+                    const authorSelectors = ['.UserLink-link', '.AuthorInfo-name', '.UserInfo-name', 'a.author-link'];
+                    for (const selector of authorSelectors) {
+                        const el = item.querySelector(selector);
+                        if (el && el.innerText) {
+                            author = el.innerText;
+                            break;
+                        }
+                    }
+                    
+                    // 尝试多种可能的内容选择器
+                    let content = '';
+                    const contentSelectors = ['.RichText.ztext', '.RichContent-inner', '.content', '.AnswerItem-content'];
+                    for (const selector of contentSelectors) {
+                        const el = item.querySelector(selector);
+                        if (el && el.innerText) {
+                            content = el.innerText;
+                            break;
+                        }
+                    }
+                    
+                    // 尝试多种可能的投票选择器
+                    let vote = '0';
+                    const voteSelectors = ['.VoteButton--up', '.VoteCount', '.AnswerItem-voteCount', '.Vote-count'];
+                    for (const selector of voteSelectors) {
+                        const el = item.querySelector(selector);
+                        if (el && el.innerText) {
+                            vote = el.innerText;
+                            break;
+                        }
+                    }
+                    
+                    return { author, content, vote };
                 });
             });
             allAnswers.push(...initialAnswers);
@@ -1052,48 +1200,95 @@ app.post('/api/scrape', async (req, res) => {
             
             let nextUrl = discoveredApiUrl;
             let apiRequestCount = 0;
+            let retryCount = 0;
+            const maxRetries = 3;
 
             while (nextUrl && apiRequestCount < 200) { 
                 apiRequestCount++;
                 logProgress(`[API模式] 第 ${apiRequestCount} 次请求...`);
                 
-                const apiRes = await fetch(nextUrl, {
-                    headers: {
-                        'Cookie': cookieString,
-                        'User-Agent': userAgent,
-                        'Accept': 'application/json, text/plain, */*',
-                    }
-                });
-
-                if(!apiRes.ok) {
-                    logProgress(`[API模式] 请求失败，状态码: ${apiRes.status}`);
-                    break;
-                }
-                
-                const data = await apiRes.json();
-                
-                if (data.data && Array.isArray(data.data)) {
-                    const answersFromApi = data.data.map(item => {
-                        const $ = cheerio.load(item.content);
-                        return {
-                            author: item.author.name,
-                            content: $.text(),
-                            vote: item.voteup_count,
-                        };
+                try {
+                    const apiRes = await fetch(nextUrl, {
+                        headers: {
+                            'Cookie': cookieString,
+                            'User-Agent': userAgent,
+                            'Accept': 'application/json, text/plain, */*',
+                            'Referer': url,
+                            'Origin': 'https://www.zhihu.com'
+                        },
+                        timeout: 30000 // 30秒超时
                     });
-                    allAnswers.push(...answersFromApi);
-                    logProgress(`[API模式] 成功获取 ${answersFromApi.length} 个回答。当前总数: ${allAnswers.length}`);
-                }
 
-                if (data.paging && !data.paging.is_end) {
-                    nextUrl = data.paging.next;
-                } else {
-                    logProgress('[API模式] API已返回所有数据。');
-                    nextUrl = null;
+                    if(!apiRes.ok) {
+                        logProgress(`[API模式] 请求失败，状态码: ${apiRes.status}`);
+                        if (retryCount < maxRetries) {
+                            retryCount++;
+                            logProgress(`[API模式] 尝试第 ${retryCount} 次重试...`);
+                            await new Promise(resolve => setTimeout(resolve, 5000)); // 等待5秒后重试
+                            continue;
+                        } else {
+                            logProgress('[API模式] 达到最大重试次数，切换到传统模式');
+                            break;
+                        }
+                    }
+                    
+                    retryCount = 0; // 重置重试计数
+                    const data = await apiRes.json();
+                    
+                    if (data.data && Array.isArray(data.data)) {
+                        const answersFromApi = data.data.map(item => {
+                            try {
+                                const $ = cheerio.load(item.content || '');
+                                return {
+                                    author: item.author?.name || '匿名用户',
+                                    content: $.text() || '',
+                                    vote: item.voteup_count?.toString() || '0',
+                                };
+                            } catch (e) {
+                                logProgress(`[API模式] 解析回答失败: ${e.message}`);
+                                return {
+                                    author: '解析失败',
+                                    content: '',
+                                    vote: '0'
+                                };
+                            }
+                        });
+                        allAnswers.push(...answersFromApi);
+                        logProgress(`[API模式] 成功获取 ${answersFromApi.length} 个回答。当前总数: ${allAnswers.length}`);
+                    }
+
+                    if (data.paging && !data.paging.is_end) {
+                        nextUrl = data.paging.next;
+                    } else {
+                        logProgress('[API模式] API已返回所有数据。');
+                        nextUrl = null;
+                    }
+                    
+                    // 随机等待1-3秒，避免请求过快
+                    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
+                } catch (error) {
+                    logProgress(`[API模式] 请求出错: ${error.message}`);
+                    if (retryCount < maxRetries) {
+                        retryCount++;
+                        logProgress(`[API模式] 尝试第 ${retryCount} 次重试...`);
+                        await new Promise(resolve => setTimeout(resolve, 5000)); // 等待5秒后重试
+                    } else {
+                        logProgress('[API模式] 达到最大重试次数，切换到传统模式');
+                        break;
+                    }
                 }
-                await new Promise(resolve => setTimeout(resolve, Math.random() * 1000 + 500));
             }
 
+            // 如果API模式没有获取到足够的回答，尝试使用传统模式补充
+            if (allAnswers.length < 20) {
+                logProgress(`[API模式] 仅获取到 ${allAnswers.length} 个回答，尝试使用传统模式补充...`);
+                const traditionalAnswers = await legacyScrollAndScrape(page, logProgress);
+                // 合并结果，去重
+                const seenAuthors = new Set(allAnswers.map(a => a.author));
+                const uniqueTraditionalAnswers = traditionalAnswers.filter(a => !seenAuthors.has(a.author));
+                allAnswers.push(...uniqueTraditionalAnswers);
+                logProgress(`[混合模式] 传统模式补充了 ${uniqueTraditionalAnswers.length} 个回答，当前总数: ${allAnswers.length}`);
+            }
         } else {
             logProgress('警告: 未能发现API端点，退回至传统的滚动模式。');
             allAnswers = await legacyScrollAndScrape(page, logProgress);
