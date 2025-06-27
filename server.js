@@ -9,9 +9,6 @@ const { promisify } = require('util');
 const stream =require('stream');
 const pipeline = promisify(stream.pipeline);
 const Jimp = require('jimp');
-const fetch = require('node-fetch');
-const cheerio = require('cheerio');
-const { v4: uuidv4 } = require('uuid');
 
 const getPuppeteerLaunchOptions = (logProgress) => {
   let launchOptions = {};
@@ -185,10 +182,26 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
     logProgress('正在导航到页面: ' + url);
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 3600000 });
     logProgress('页面基本结构加载完成');
-    
-    // 智能等待关键元素出现
+
+    // 增加一个短暂的固定等待，模拟用户行为
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    logProgress('已等待3秒，开始检测关键元素');
+
+    // 智能等待关键元素出现，增加备用选择器和更长的超时
     logProgress('等待页面加载完成...');
-    await page.waitForSelector('.QuestionHeader-title', { timeout: 30000 }); // 恢复适中的等待时间
+    try {
+      await page.waitForSelector('.QuestionHeader-title, .Question-mainColumn h1', { timeout: 1800000 });
+    } catch (e) {
+      logProgress('错误：等待关键元素失败。页面可能需要验证或已更改结构。');
+      
+      // 失败时截图以供调试
+      const screenshotPath = path.join(__dirname, 'downloads', `error_screenshot_${Date.now()}.png`);
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      logProgress(`已截取当前页面快照: ${screenshotPath}`);
+
+      // 重新抛出错误，中断后续执行
+      throw e;
+    }
     
     // 等待额外时间确保页面完全加载
     await new Promise(resolve => setTimeout(resolve, 2000));
@@ -196,7 +209,7 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
     
     // 执行多次滚动，确保加载更多回答
     logProgress('开始执行滚动，加载更多回答...');
-
+    
     // 获取当前回答数量
     let previousAnswerCount = 0;
     let currentAnswerCount = 0;
@@ -208,31 +221,12 @@ app.post('/api/fetch-zhihu-data', async (req, res) => {
     do {
       previousAnswerCount = currentAnswerCount;
       
-      // 使用模拟人类的平滑滚动代替瞬移滚动
-      logProgress(`第 ${scrollAttempts + 1} 次滚动: 开始模拟人类平滑滚动...`);
-      await page.evaluate(async () => {
-        await new Promise((resolve) => {
-          let totalHeight = 0;
-          const scrollHeight = document.body.scrollHeight;
-          const viewportHeight = window.innerHeight;
-          
-          const timer = setInterval(() => {
-            // 每次滚动一小段距离
-            const distance = Math.floor(Math.random() * 100) + 100; // 每次滚动100-200px
-            window.scrollBy(0, distance);
-            totalHeight += distance;
-
-            // 如果滚动位置超过了页面高度，则停止
-            if (window.pageYOffset + viewportHeight >= scrollHeight) {
-              clearInterval(timer);
-              resolve();
-            }
-          }, Math.floor(Math.random() * 50) + 100); // 每隔100-150ms滚动一次
-        });
+      // 执行滚动
+      await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
       });
-      logProgress(`第 ${scrollAttempts + 1} 次滚动: 平滑滚动完成。`);
-
-      // 等待加载
+      
+      // 等待加载（增加等待时间以确保内容加载）
       await new Promise(resolve => setTimeout(resolve, 3000));
       
       // 检查回答数量
@@ -921,416 +915,4 @@ app.get('*', (req, res) => {
 // 启动服务器
 app.listen(PORT, () => {
   console.log(`服务器运行在端口 ${PORT}`);
-});
-
-async function legacyScrollAndScrape(page, logProgress) {
-    logProgress('[传统模式] 开始滚动加载...');
-    let previousAnswerCount = 0;
-    let currentAnswerCount = 0;
-    let scrollAttempts = 0;
-    let noChangeCount = 0;
-    const maxScrollAttempts = 15;
-    const maxNoChangeAttempts = 3;
-
-    do {
-        // 使用更多的选择器来适应知乎可能的页面结构变化
-        previousAnswerCount = await page.evaluate(() => {
-            // 尝试多种可能的答案容器选择器
-            const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
-            for (const selector of selectors) {
-                const elements = document.querySelectorAll(selector);
-                if (elements && elements.length > 0) {
-                    return elements.length;
-                }
-            }
-            return 0; // 如果都没找到，返回0
-        });
-        
-        await page.evaluate(async () => {
-            await new Promise((resolve) => {
-                const scrollHeight = document.body.scrollHeight;
-                const viewportHeight = window.innerHeight;
-                let scrollCount = 0;
-                const timer = setInterval(() => {
-                    const distance = Math.floor(Math.random() * 100) + 100;
-                    window.scrollBy(0, distance);
-                    scrollCount++;
-                    if (window.pageYOffset + viewportHeight >= scrollHeight || scrollCount > 30) {
-                        clearInterval(timer);
-                        resolve();
-                    }
-                }, Math.floor(Math.random() * 50) + 100);
-            });
-        });
-        logProgress(`[传统模式] 第 ${scrollAttempts + 1} 次滚动完成。`);
-
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        
-        // 同样使用更多的选择器来计算当前回答数
-        currentAnswerCount = await page.evaluate(() => {
-            const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
-            for (const selector of selectors) {
-                const elements = document.querySelectorAll(selector);
-                if (elements && elements.length > 0) {
-                    return elements.length;
-                }
-            }
-            return 0;
-        });
-        logProgress(`[传统模式] 当前回答数: ${currentAnswerCount}`);
-
-        if (currentAnswerCount === previousAnswerCount) {
-            noChangeCount++;
-        } else {
-            noChangeCount = 0;
-        }
-        scrollAttempts++;
-        
-    } while (scrollAttempts < maxScrollAttempts && noChangeCount < maxNoChangeAttempts);
-    
-    logProgress('[传统模式] 滚动结束。');
-    return page.evaluate(() => {
-        // 尝试多种可能的选择器组合来提取答案
-        const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
-        let items = [];
-        
-        for (const selector of selectors) {
-            const elements = document.querySelectorAll(selector);
-            if (elements && elements.length > 0) {
-                items = Array.from(elements);
-                break;
-            }
-        }
-        
-        return items.map(item => {
-            // 尝试多种可能的作者选择器
-            let author = '匿名用户';
-            const authorSelectors = ['.UserLink-link', '.AuthorInfo-name', '.UserInfo-name', 'a.author-link'];
-            for (const selector of authorSelectors) {
-                const el = item.querySelector(selector);
-                if (el && el.innerText) {
-                    author = el.innerText;
-                    break;
-                }
-            }
-            
-            // 尝试多种可能的内容选择器
-            let content = '';
-            const contentSelectors = ['.RichText.ztext', '.RichContent-inner', '.content', '.AnswerItem-content'];
-            for (const selector of contentSelectors) {
-                const el = item.querySelector(selector);
-                if (el && el.innerText) {
-                    content = el.innerText;
-                    break;
-                }
-            }
-            
-            // 尝试多种可能的投票选择器
-            let vote = '0';
-            const voteSelectors = ['.VoteButton--up', '.VoteCount', '.AnswerItem-voteCount', '.Vote-count'];
-            for (const selector of voteSelectors) {
-                const el = item.querySelector(selector);
-                if (el && el.innerText) {
-                    vote = el.innerText;
-                    break;
-                }
-            }
-            
-            return { author, content, vote };
-        });
-    });
-}
-
-app.post('/api/scrape', async (req, res) => {
-    const { url, cookie } = req.body;
-    const sessionId = uuidv4();
-    sessions.set(sessionId, { status: '准备中', progress: 0 });
-
-    const logProgress = (message) => {
-        // ... existing code ...
-    };
-
-    let browser;
-    try {
-        const browser = await puppeteer.launch(getPuppeteerLaunchOptions(logProgress));
-        const page = await browser.newPage();
-        
-        await page.setCookie(...JSON.parse(cookie));
-        logProgress('Cookie设置成功');
-
-        // 禁用图片、字体和CSS加载，加快页面渲染速度
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            if (req.resourceType() === 'image' || req.resourceType() === 'font' || req.resourceType() === 'stylesheet') {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-        
-        logProgress('已优化资源加载策略，禁用了图片、字体和CSS');
-
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 300000 });
-        logProgress('页面导航成功');
-
-        // 增加等待时间并添加备用选择器
-        logProgress('等待页面加载完成，寻找问题标题元素...');
-        try {
-            await page.waitForSelector('.QuestionHeader-title, .Question-title, h1.title, .QuestionPage h1', { 
-                timeout: 300000, // 增加到5分钟(300秒)
-                visible: true 
-            });
-            logProgress('成功找到问题标题元素');
-        } catch (error) {
-            logProgress('警告：未能通过选择器找到标题，尝试检查页面内容...');
-            
-            // 截图保存，用于诊断
-            const screenshotPath = path.join(__dirname, 'downloads', `error_screenshot_${Date.now()}.png`);
-            await page.screenshot({ path: screenshotPath, fullPage: true });
-            logProgress(`已保存页面截图至: ${screenshotPath}`);
-            
-            // 检查页面是否包含验证码
-            const pageContent = await page.content();
-            if (pageContent.includes('验证码') || pageContent.includes('captcha') || pageContent.includes('安全验证')) {
-                throw new Error('检测到知乎验证码页面，请更新Cookie或使用其他IP地址');
-            } else {
-                throw error; // 重新抛出原始错误
-            }
-        }
-
-        // 增加一个短暂的等待，确保页面完全加载
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        logProgress('页面完全加载完成');
-
-        let discoveredApiUrl = null;
-        const apiResponseListener = async (response) => {
-            const req = response.request();
-            // 扩大API匹配范围，捕获更多可能的API端点
-            if (req.resourceType() === 'xhr' || req.resourceType() === 'fetch') {
-                const url = req.url();
-                if ((url.includes('/answers') || url.includes('/api/v4/questions/') || url.includes('/api/v4/answer')) && 
-                    (req.method() === 'GET' || req.method() === 'POST')) {
-                    try {
-                        const json = await response.json().catch(() => null);
-                        if (json && json.paging && typeof json.paging.is_end !== 'undefined') {
-                            logProgress(`成功捕获知乎回答API端点: ${url}`);
-                            if(!discoveredApiUrl) discoveredApiUrl = url;
-                        }
-                    } catch (e) { 
-                        // 忽略非JSON响应
-                        logProgress(`尝试解析响应失败: ${e.message}`);
-                    }
-                }
-            }
-        };
-        page.on('response', apiResponseListener);
-
-        logProgress('执行初步滚动以发现API...');
-        // 执行多次滚动，增加API发现概率
-        for (let i = 0; i < 3; i++) {
-            await page.evaluate('window.scrollTo(0, document.body.scrollHeight / 3 * ' + (i + 1) + ')');
-            await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-        await new Promise(resolve => setTimeout(resolve, 4000));
-
-        page.off('response', apiResponseListener);
-
-        let allAnswers = [];
-
-        if (discoveredApiUrl) {
-            logProgress('检测到API，切换到API直连模式...');
-            
-            // 从页面获取初始回答
-            const initialAnswers = await page.evaluate(() => {
-                // 尝试多种可能的选择器
-                const selectors = ['.List-item', '.AnswerItem', '.ContentItem', '.AnswerCard'];
-                let items = [];
-                
-                for (const selector of selectors) {
-                    const elements = document.querySelectorAll(selector);
-                    if (elements && elements.length > 0) {
-                        items = Array.from(elements);
-                        break;
-                    }
-                }
-                
-                return items.map(item => {
-                    // 尝试多种可能的作者选择器
-                    let author = '匿名用户';
-                    const authorSelectors = ['.UserLink-link', '.AuthorInfo-name', '.UserInfo-name', 'a.author-link'];
-                    for (const selector of authorSelectors) {
-                        const el = item.querySelector(selector);
-                        if (el && el.innerText) {
-                            author = el.innerText;
-                            break;
-                        }
-                    }
-                    
-                    // 尝试多种可能的内容选择器
-                    let content = '';
-                    const contentSelectors = ['.RichText.ztext', '.RichContent-inner', '.content', '.AnswerItem-content'];
-                    for (const selector of contentSelectors) {
-                        const el = item.querySelector(selector);
-                        if (el && el.innerText) {
-                            content = el.innerText;
-                            break;
-                        }
-                    }
-                    
-                    // 尝试多种可能的投票选择器
-                    let vote = '0';
-                    const voteSelectors = ['.VoteButton--up', '.VoteCount', '.AnswerItem-voteCount', '.Vote-count'];
-                    for (const selector of voteSelectors) {
-                        const el = item.querySelector(selector);
-                        if (el && el.innerText) {
-                            vote = el.innerText;
-                            break;
-                        }
-                    }
-                    
-                    return { author, content, vote };
-                });
-            });
-            allAnswers.push(...initialAnswers);
-            logProgress(`已从初始页面抓取 ${initialAnswers.length} 个回答。`);
-
-            const cookies = await page.cookies();
-            const cookieString = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-            const userAgent = await browser.userAgent();
-            
-            let nextUrl = discoveredApiUrl;
-            let apiRequestCount = 0;
-            let retryCount = 0;
-            const maxRetries = 3;
-
-            while (nextUrl && apiRequestCount < 200) { 
-                apiRequestCount++;
-                logProgress(`[API模式] 第 ${apiRequestCount} 次请求...`);
-                
-                try {
-                    const apiRes = await fetch(nextUrl, {
-                        headers: {
-                            'Cookie': cookieString,
-                            'User-Agent': userAgent,
-                            'Accept': 'application/json, text/plain, */*',
-                            'Referer': url,
-                            'Origin': 'https://www.zhihu.com'
-                        },
-                        timeout: 30000 // 30秒超时
-                    });
-
-                    if(!apiRes.ok) {
-                        logProgress(`[API模式] 请求失败，状态码: ${apiRes.status}`);
-                        if (retryCount < maxRetries) {
-                            retryCount++;
-                            logProgress(`[API模式] 尝试第 ${retryCount} 次重试...`);
-                            await new Promise(resolve => setTimeout(resolve, 5000)); // 等待5秒后重试
-                            continue;
-                        } else {
-                            logProgress('[API模式] 达到最大重试次数，切换到传统模式');
-                            break;
-                        }
-                    }
-                    
-                    retryCount = 0; // 重置重试计数
-                    const data = await apiRes.json();
-                    
-                    if (data.data && Array.isArray(data.data)) {
-                        const answersFromApi = data.data.map(item => {
-                            try {
-                                const $ = cheerio.load(item.content || '');
-                                return {
-                                    author: item.author?.name || '匿名用户',
-                                    content: $.text() || '',
-                                    vote: item.voteup_count?.toString() || '0',
-                                };
-                            } catch (e) {
-                                logProgress(`[API模式] 解析回答失败: ${e.message}`);
-                                return {
-                                    author: '解析失败',
-                                    content: '',
-                                    vote: '0'
-                                };
-                            }
-                        });
-                        allAnswers.push(...answersFromApi);
-                        logProgress(`[API模式] 成功获取 ${answersFromApi.length} 个回答。当前总数: ${allAnswers.length}`);
-                    }
-
-                    if (data.paging && !data.paging.is_end) {
-                        nextUrl = data.paging.next;
-                    } else {
-                        logProgress('[API模式] API已返回所有数据。');
-                        nextUrl = null;
-                    }
-                    
-                    // 随机等待1-3秒，避免请求过快
-                    await new Promise(resolve => setTimeout(resolve, Math.random() * 2000 + 1000));
-                } catch (error) {
-                    logProgress(`[API模式] 请求出错: ${error.message}`);
-                    if (retryCount < maxRetries) {
-                        retryCount++;
-                        logProgress(`[API模式] 尝试第 ${retryCount} 次重试...`);
-                        await new Promise(resolve => setTimeout(resolve, 5000)); // 等待5秒后重试
-                    } else {
-                        logProgress('[API模式] 达到最大重试次数，切换到传统模式');
-                        break;
-                    }
-                }
-            }
-
-            // 如果API模式没有获取到足够的回答，尝试使用传统模式补充
-            if (allAnswers.length < 20) {
-                logProgress(`[API模式] 仅获取到 ${allAnswers.length} 个回答，尝试使用传统模式补充...`);
-                const traditionalAnswers = await legacyScrollAndScrape(page, logProgress);
-                // 合并结果，去重
-                const seenAuthors = new Set(allAnswers.map(a => a.author));
-                const uniqueTraditionalAnswers = traditionalAnswers.filter(a => !seenAuthors.has(a.author));
-                allAnswers.push(...uniqueTraditionalAnswers);
-                logProgress(`[混合模式] 传统模式补充了 ${uniqueTraditionalAnswers.length} 个回答，当前总数: ${allAnswers.length}`);
-            }
-        } else {
-            logProgress('警告: 未能发现API端点，退回至传统的滚动模式。');
-            allAnswers = await legacyScrollAndScrape(page, logProgress);
-        }
-
-        const questionTitle = await page.evaluate(() => document.querySelector('.QuestionHeader-title').innerText);
-        
-        progressData.status = '数据提取完成';
-        progressData.progress = 100;
-        updateProgress(sessionId, progressData);
-
-        await browser.close();
-
-        const csv = convertToCsv(allAnswers, questionTitle);
-        const downloadsDir = path.join(__dirname, 'downloads');
-        if (!fs.existsSync(downloadsDir)) {
-            fs.mkdirSync(downloadsDir);
-        }
-        const filename = `zhihu_question_${questionTitle.replace(/[\\/:*?"<>|]/g, '_')}_${Date.now()}.csv`;
-        const filePath = path.join(downloadsDir, filename);
-        fs.writeFileSync(filePath, csv);
-
-        res.json({
-            success: true,
-            message: '爬取成功',
-            questionTitle,
-            totalAnswers: allAnswers.length,
-            answers: allAnswers,
-            downloadUrl: `/api/download/${filename}`
-        });
-
-    } catch (error) {
-        logProgress(`爬取知乎数据错误: ${error.message}`);
-        console.error('爬取知乎数据错误:', error);
-        if (browser) {
-            await browser.close();
-        }
-        sessions.delete(sessionId);
-        res.status(500).json({ success: false, message: error.message });
-    }
-});
-
-app.get('/api/progress/:sessionId', (req, res) => {
-    // ... existing code ...
 }); 
